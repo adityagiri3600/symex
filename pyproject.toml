@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "symexec-engine"
+version = "0.1.0"
+description = "Minimal x86-64 symbolic execution engine with SSA-style IR and SMT-based bug finding"
+requires-python = ">=3.10"
+dependencies = [
+    "z3-solver>=4.12.0",
+    "capstone>=5.0.0"
+]
+
+[project.scripts]
+symexec = "symexec_engine.cli:main"
