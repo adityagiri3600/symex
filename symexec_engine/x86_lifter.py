@@ -4,6 +4,7 @@ from typing import Dict, List, Optional
 from capstone import Cs, CS_ARCH_X86, CS_MODE_64
 from capstone.x86 import X86_OP_REG, X86_OP_IMM, X86_OP_MEM
 from .ir import (
+    Cmp,
     CmpOpKind,
     Program,
     BasicBlock,
