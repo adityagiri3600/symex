@@ -19,6 +19,7 @@ from .ir import (
     CondBr,
     Jump,
     Return,
+    Assume,
 )
 from .bugs import BugReport
 
@@ -32,7 +33,10 @@ class SymbolicState:
     inputs: List[str] = field(default_factory=list)
 
 
+@dataclass
 class Executor:
+    debug: bool = False
+
     def _expr_for_operand(
         self,
         state: SymbolicState,
@@ -63,7 +67,13 @@ class Executor:
         solver = z3.Solver()
         for c in constraints:
             solver.add(c)
+        if self.debug:
+            print("solver_check")
+            for c in constraints:
+                print("  ", c)
         result = solver.check()
+        if self.debug:
+            print("solver_result", result)
         if result == z3.sat:
             return solver.model()
         return None
@@ -95,8 +105,17 @@ class Executor:
     ) -> Optional[BugReport]:
         constraints = list(state.path_cond)
         constraints.append(bug_condition)
+        if self.debug:
+            print("[BUG_CANDIDATE]", kind, message)
+            print("  path_cond:")
+            for c in state.path_cond:
+                print("    ", c)
+            print("  bug_cond:")
+            print("    ", bug_condition)
         model = self._check_sat(constraints)
         if model is None:
+            if self.debug:
+                print("[BUG_UNSAT]")
             return None
         inputs = self._extract_inputs(state, model)
         addr_value: Optional[int] = None
@@ -105,6 +124,12 @@ class Executor:
             if isinstance(v, z3.BitVecNumRef):
                 addr_value = v.as_long()
         path_strings = [str(c) for c in state.path_cond]
+        if self.debug:
+            print("[BUG_MODEL]")
+            for k, v in inputs.items():
+                print("   ", k, "=", v)
+            if addr_value is not None:
+                print("   addr =", addr_value)
         return BugReport(
             kind=kind,
             message=message,
@@ -121,11 +146,20 @@ class Executor:
         bugs: List[BugReport],
         worklist: List[SymbolicState],
     ) -> str:
+        if self.debug:
+            print("[EXEC]", state.block, type(instr).__name__, instr)
         if isinstance(instr, Input):
             bv = z3.BitVec(instr.dest, instr.bits)
             state.vars[instr.dest] = bv
             state.types[instr.dest] = instr.bits
             state.inputs.append(instr.dest)
+            return "continue"
+
+        if isinstance(instr, Assume):
+            cond = self._expr_for_operand(state, instr.cond, expect_bool=True)
+            state.path_cond.append(cond)
+            if self.debug:
+                print("[ASSUME]", cond)
             return "continue"
 
         if isinstance(instr, Const):
@@ -139,9 +173,12 @@ class Executor:
             src_bits = state.types[instr.src]
             if not isinstance(src_bits, int):
                 raise TypeError("sext source must be bitvector")
-            if instr.dest_bits <= src_bits:
-                raise ValueError("dest_bits must be greater than source width")
-            ext = z3.SignExt(instr.dest_bits - src_bits, src)
+            if instr.dest_bits < src_bits:
+                raise ValueError("dest_bits must be >= source width")
+            if instr.dest_bits == src_bits:
+                ext = src
+            else:
+                ext = z3.SignExt(instr.dest_bits - src_bits, src)
             state.vars[instr.dest] = ext
             state.types[instr.dest] = instr.dest_bits
             return "continue"
@@ -265,17 +302,25 @@ class Executor:
             false_state.block = instr.false_target
             false_state.path_cond.append(z3.Not(cond))
             if self._check_sat(true_state.path_cond) is not None:
+                if self.debug:
+                    print("[BRANCH_TRUE_ENQUEUE]", instr.true_target)
                 worklist.append(true_state)
             if self._check_sat(false_state.path_cond) is not None:
+                if self.debug:
+                    print("[BRANCH_FALSE_ENQUEUE]", instr.false_target)
                 worklist.append(false_state)
             return "stop"
 
         if isinstance(instr, Jump):
+            if self.debug:
+                print("[JUMP]", instr.target)
             state.block = instr.target
             worklist.append(state)
             return "stop"
 
         if isinstance(instr, Return):
+            if self.debug:
+                print("[RETURN]", instr.value)
             return "stop"
 
         raise NotImplementedError(f"unsupported instruction {type(instr)}")
@@ -286,9 +331,13 @@ class Executor:
         worklist: List[SymbolicState] = [initial]
         while worklist:
             state = worklist.pop()
+            if self.debug:
+                print("=== NEW_PATH block", state.block)
+                print("    path_cond:", state.path_cond)
             while True:
                 block = program.blocks[state.block]
                 progressed = False
+                action: Optional[str] = None
                 for instr in block.instructions:
                     action = self._exec_instr(program, state, instr, bugs, worklist)
                     progressed = True
@@ -296,4 +345,6 @@ class Executor:
                         break
                 if not progressed or action == "stop":
                     break
+        if self.debug:
+            print("=== DONE, bugs:", len(bugs))
         return bugs

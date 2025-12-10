@@ -13,6 +13,9 @@ class Input(Instr):
     dest: str
     bits: int
 
+@dataclass
+class Assume(Instr):
+    cond: str
 
 @dataclass
 class Const(Instr):
